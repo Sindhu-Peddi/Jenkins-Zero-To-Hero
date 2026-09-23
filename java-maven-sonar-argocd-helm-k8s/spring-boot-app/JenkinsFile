@@ -1,68 +1,214 @@
+```groovy
 pipeline {
   agent {
     docker {
-      image 'abhishekf5/maven-abhishek-docker-agent:v1'
-      args '--user root -v /var/run/docker.sock:/var/run/docker.sock' // mount Docker socket to access the host's Docker daemon
+      image 'maven:3.9.16-eclipse-temurin-21'
+      args '--user root -v /var/run/docker.sock:/var/run/docker.sock'
     }
   }
+
   stages {
+
     stage('Checkout') {
       steps {
         sh 'echo passed'
-        //git branch: 'main', url: 'https://github.com/Sindhu-Peddi/Jenkins-Zero-To-Hero.git'
+        // git branch: 'main', url: 'https://github.com/Sindhu-Peddi/Jenkins-Zero-To-Hero.git'
       }
     }
+
+    stage('Check Environment') {
+      steps {
+        sh '''
+          echo "=============================="
+          echo "Java Version"
+          echo "=============================="
+          java -version
+
+          echo "=============================="
+          echo "Maven Version"
+          echo "=============================="
+          mvn -version
+
+          echo "=============================="
+          echo "Git Version"
+          echo "=============================="
+          git --version
+
+          echo "=============================="
+          echo "Docker Version"
+          echo "=============================="
+          docker --version
+        '''
+      }
+    }
+
     stage('Build and Test') {
       steps {
         sh 'ls -ltr'
-        // build the project and create a JAR file
-        sh 'cd java-maven-sonar-argocd-helm-k8s/spring-boot-app && mvn clean package'
+
+        // Build the project and create a JAR file
+        sh '''
+          cd java-maven-sonar-argocd-helm-k8s/spring-boot-app
+          mvn clean package
+        '''
       }
     }
+
     stage('Static Code Analysis') {
+
       environment {
         SONAR_URL = "http://3.94.207.133:9000"
       }
+
       steps {
-        withCredentials([string(credentialsId: 'sonarqube', variable: 'SONAR_AUTH_TOKEN')]) {
-          sh 'cd java-maven-sonar-argocd-helm-k8s/spring-boot-app && mvn sonar:sonar -Dsonar.login=$SONAR_AUTH_TOKEN -Dsonar.host.url=${SONAR_URL}'
+
+        withCredentials([
+          string(
+            credentialsId: 'sonarqube',
+            variable: 'SONAR_AUTH_TOKEN'
+          )
+        ]) {
+
+          sh '''
+            cd java-maven-sonar-argocd-helm-k8s/spring-boot-app
+
+            mvn sonar:sonar \
+              -Dsonar.login=$SONAR_AUTH_TOKEN \
+              -Dsonar.host.url=$SONAR_URL
+          '''
         }
       }
     }
+
     stage('Build and Push Docker Image') {
+
       environment {
         DOCKER_IMAGE = "sindhupeddi/ultimate-cicd:${BUILD_NUMBER}"
-        // DOCKERFILE_LOCATION = "java-maven-sonar-argocd-helm-k8s/spring-boot-app/Dockerfile"
-        REGISTRY_CREDENTIALS = credentials('docker-cred')
       }
+
       steps {
+
         script {
-            sh 'cd java-maven-sonar-argocd-helm-k8s/spring-boot-app && docker build -t ${DOCKER_IMAGE} .'
-            def dockerImage = docker.image("${DOCKER_IMAGE}")
-            docker.withRegistry('https://index.docker.io/v1/', "docker-cred") {
-                dockerImage.push()
-            }
+
+          sh '''
+            cd java-maven-sonar-argocd-helm-k8s/spring-boot-app
+
+            docker build \
+              -t ${DOCKER_IMAGE} .
+          '''
+
+          def dockerImage = docker.image("${DOCKER_IMAGE}")
+
+          docker.withRegistry(
+            'https://index.docker.io/v1/',
+            'docker-cred'
+          ) {
+            dockerImage.push()
+          }
         }
       }
     }
+
     stage('Update Deployment File') {
-        environment {
-            GIT_REPO_NAME = "Jenkins-Zero-To-Hero"
-            GIT_USER_NAME = "Sindhu-Peddi"
+
+      environment {
+        GIT_REPO_NAME = "Jenkins-Zero-To-Hero"
+        GIT_USER_NAME = "Sindhu-Peddi"
+      }
+
+      steps {
+
+        withCredentials([
+          string(
+            credentialsId: 'github',
+            variable: 'GITHUB_TOKEN'
+          )
+        ]) {
+
+          sh '''
+            git config user.email "sindhupeddi123@gmail.com"
+            git config user.name "Sindhu-Peddi"
+
+            sed -i "s/replaceImageTag/${BUILD_NUMBER}/g" \
+              java-maven-sonar-argocd-helm-k8s/spring-boot-app-manifests/deployment.yml
+
+            git add \
+              java-maven-sonar-argocd-helm-k8s/spring-boot-app-manifests/deployment.yml
+
+            git commit \
+              -m "Update deployment image to version ${BUILD_NUMBER}"
+
+            git push \
+              https://${GITHUB_TOKEN}@github.com/${GIT_USER_NAME}/${GIT_REPO_NAME} \
+              HEAD:main
+          '''
         }
-        steps {
-            withCredentials([string(credentialsId: 'github', variable: 'GITHUB_TOKEN')]) {
-                sh '''
-                    git config user.email "sindhupeddi123@gmail.com"
-                    git config user.name "Sindhu-Peddi"
-                    BUILD_NUMBER=${BUILD_NUMBER}
-                    sed -i "s/replaceImageTag/${BUILD_NUMBER}/g" java-maven-sonar-argocd-helm-k8s/spring-boot-app-manifests/deployment.yml
-                    git add java-maven-sonar-argocd-helm-k8s/spring-boot-app-manifests/deployment.yml
-                    git commit -m "Update deployment image to version ${BUILD_NUMBER}"
-                    git push https://${GITHUB_TOKEN}@github.com/${GIT_USER_NAME}/${GIT_REPO_NAME} HEAD:main
-                '''
-            }
-        }
+      }
     }
   }
 }
+```
+
+### What changed from your old Jenkinsfile?
+
+**Old:**
+
+```groovy
+image 'abhishekf5/maven-abhishek-docker-agent:v1'
+```
+
+**New:**
+
+```groovy
+image 'maven:3.9.16-eclipse-temurin-21'
+```
+
+This gives your Jenkins container:
+
+```text
+Maven 3.9.16
+      +
+Java 21
+```
+
+The official Maven image currently provides this exact Java 21 tag.
+
+I also added:
+
+```groovy
+stage('Check Environment')
+```
+
+so your first run will tell you exactly what Jenkins is using:
+
+```text
+Java Version
+Maven Version
+Git Version
+Docker Version
+```
+
+### ⚠️ One thing to check before running
+
+Your Docker stage uses:
+
+```bash
+docker build
+```
+
+and your agent has:
+
+```text
+-v /var/run/docker.sock:/var/run/docker.sock
+```
+
+The socket lets the container communicate with the host Docker daemon, but the **Docker CLI must also be available inside the container**. Jenkins documents the socket-based Docker setup, but the Maven image itself is primarily a Maven/Java image.
+
+So after you save this Jenkinsfile, if the `Check Environment` stage shows:
+
+```text
+docker: command not found
+```
+
+**don't change the whole Jenkinsfile yet.** Send me that output and I'll show you the cleanest way to add Docker CLI while keeping this Java 21 Maven setup.
+
